@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>小组作业工作台</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📋</text></svg>"/>
+<!-- 第三方库走 CDN 并带 SRI 完整性校验（hash 已与 cdnjs 官方 API 双向核对） -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js" crossorigin="anonymous" integrity="sha512-pmjEJQ7CveksANaAKdCJZMig7eAcCFFzE1b5XnlnxdB/vU3AOStJ5SF7w4tFuqskuU31ETnAaWTYRQOYg2WHKw=="></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.4.17/purify.min.js" crossorigin="anonymous" integrity="sha512-2wT0W6vojz3cJuLoa/DxrPVQRinkfRjFWMWIDK4NghTqObEhpem1nEkeK0d9ZE+/hyvfMNuJZlfxM4LsRgeoSA=="></script>
+<style>
+:root{
+  --pri:#7B3B2E;--pri-l:#A65D4E;--pri-bg:#FBF0ED;
+  --sec:#2E5468;--sec-bg:#EBF2F6;
+  --acc:#C08A30;--acc-bg:#FDF5E4;
+  --bg:#FAF6F0;--card:#fff;--border:#E8DFD0;--border-s:#F2EBE0;
+  --txt:#2A2520;--txt2:#5C554C;--mut:#918A7E;
+  --ok:#4A7C59;--ok-bg:#E7F1EA;
+  --warn:#C08A30;--warn-bg:#FDF5E4;
+  --err:#B04035;--err-bg:#FBE8E5;
+  --info:#3E6B8A;--info-bg:#E8F0F5;
+  --r:10px;--rs:6px;
+  --sh:0 2px 8px rgba(42,37,32,.07);
+  --sh-l:0 8px 24px rgba(42,37,32,.12);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{font:14px/1.6 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--txt);-webkit-font-smoothing:antialiased}
+button{font:inherit;cursor:pointer;border:none;background:none;color:inherit}
+input,textarea,select{font:inherit;color:inherit}
+::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-thumb{background:#D5CBB4;border-radius:3px}
+
+#loading{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:2000;gap:14px}
+#loading.hide{display:none}
+.spinner{width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--pri);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+#app{display:flex;height:100vh}
+.side{width:210px;background:#2A231D;color:#E8DFD0;display:flex;flex-direction:column;flex-shrink:0}
+.side-head{padding:18px 16px 14px;border-bottom:1px solid rgba(232,223,208,.1)}
+.side-title{font-size:14px;font-weight:600;color:#F5EDE0;line-height:1.3}
+.side-sub{font-size:11px;color:#9E9484;margin-top:4px}
+.nav{flex:1;padding:10px 8px;overflow-y:auto}
+.nav-btn{display:flex;align-items:center;gap:9px;width:100%;padding:9px 12px;border-radius:var(--rs);color:#BEB4A2;font-size:13px;text-align:left;transition:.15s;margin-bottom:2px}
+.nav-btn:hover{background:rgba(232,223,208,.07);color:#F5EDE0}
+.nav-btn.on{background:var(--pri);color:#fff;font-weight:500}
+.nav-badge{margin-left:auto;background:rgba(192,138,48,.3);color:#E8C87A;padding:1px 7px;border-radius:8px;font-size:11px;font-weight:600;min-width:20px;text-align:center}
+.nav-badge.alert{background:var(--err);color:#fff}
+.nav-btn.on .nav-badge{background:rgba(255,255,255,.2);color:#fff}
+.side-foot{padding:10px 12px;border-top:1px solid rgba(232,223,208,.1);font-size:10px;color:#9E9484;text-align:center;line-height:1.5}
+.side-foot .sync{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);margin-right:4px;vertical-align:middle}
+.side-foot .sync.off{background:var(--err)}
+
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.top{padding:12px 22px;background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-shrink:0;min-height:56px}
+.top-title{font-size:16px;font-weight:600}
+.top-sub{font-size:11px;color:var(--mut);margin-top:1px}
+.top-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.who-sel{padding:5px 10px;border:1.5px solid var(--border);border-radius:var(--rs);background:var(--card);font-size:12px;cursor:pointer;font-weight:500}
+.who-sel.admin{border-color:var(--acc);background:var(--acc-bg);color:#7A5A14}
+.role-tag{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600}
+.role-admin{background:var(--acc);color:#fff}
+.role-member{background:var(--border-s);color:var(--txt2)}
+
+.view{flex:1;overflow-y:auto;padding:18px 22px 40px;display:none}
+.view.on{display:block}
+
+.reminders{margin-bottom:14px;display:flex;flex-direction:column;gap:8px}
+.reminder{padding:11px 14px;border-radius:var(--r);font-size:12.5px;display:flex;align-items:flex-start;gap:10px;border-left:3px solid;animation:slideDown .3s ease-out}
+@keyframes slideDown{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+.reminder.warn{background:var(--warn-bg);border-color:var(--warn);color:#7A5A14}
+.reminder.err{background:var(--err-bg);border-color:var(--err);color:#8A2E25}
+.reminder.info{background:var(--info-bg);border-color:var(--info);color:#2A4F6A}
+.reminder-icon{font-size:16px;flex-shrink:0;margin-top:1px}
+.reminder-body{flex:1;line-height:1.5}
+.reminder-body strong{font-weight:600}
+.reminder-dismiss{padding:2px 8px;font-size:11px;border-radius:3px;opacity:.7;cursor:pointer;background:rgba(0,0,0,.05);flex-shrink:0}
+.reminder-dismiss:hover{opacity:1}
+
+.btn{padding:7px 14px;border-radius:var(--rs);font-size:12px;font-weight:500;transition:.15s;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.btn-p{background:var(--pri);color:#fff}.btn-p:hover{background:#6A3025}
+.btn-s{background:var(--card);border:1.5px solid var(--border);color:var(--txt)}.btn-s:hover{border-color:var(--pri);color:var(--pri)}
+.btn-g{color:var(--txt2)}.btn-g:hover{background:var(--border-s)}
+.btn-sm{padding:4px 10px;font-size:11px}
+.btn-xs{padding:2px 8px;font-size:10px}
+.btn-d{color:var(--err)}.btn-d:hover{background:var(--err-bg)}
+.btn-ok{background:var(--ok);color:#fff}.btn-ok:hover{background:#3A6349}
+.btn-err{background:var(--err);color:#fff}.btn-err:hover{background:#8F3229}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-ghost{background:transparent;color:var(--txt2);padding:4px 8px}
+.btn-ghost:hover{background:var(--border-s)}
+
+.card{background:var(--card);border-radius:var(--r);border:1px solid var(--border-s);box-shadow:var(--sh)}
+.card-h{padding:11px 15px;border-bottom:1px solid var(--border-s);font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px}
+.card-b{padding:12px 15px}
+
+.board-toolbar{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+.filter-chip{padding:4px 11px;background:var(--card);border:1.5px solid var(--border);border-radius:14px;font-size:11px;color:var(--txt2);cursor:pointer;transition:.15s}
+.filter-chip:hover{border-color:var(--pri-l);color:var(--pri)}
+.filter-chip.on{background:var(--pri);color:#fff;border-color:var(--pri)}
+.kanban{display:grid;grid-template-columns:repeat(5,minmax(220px,1fr));gap:10px;align-items:start}
+@media(max-width:1400px){.kanban{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:900px){.kanban{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:600px){.kanban{grid-template-columns:1fr}}
+.kcol{background:var(--border-s);border-radius:var(--r);padding:9px;min-height:200px}
+.kcol-h{font-size:11px;font-weight:700;padding:2px 4px 8px;display:flex;justify-content:space-between;align-items:center;letter-spacing:.3px}
+.kcol-n{background:var(--card);padding:1px 7px;border-radius:8px;font-size:10px;color:var(--mut);font-weight:600}
+.kcol.s-unclaimed .kcol-h{color:var(--mut)}
+.kcol.s-doing .kcol-h{color:var(--info)}
+.kcol.s-review .kcol-h{color:var(--warn)}
+.kcol.s-rework .kcol-h{color:var(--err)}
+.kcol.s-done .kcol-h{color:var(--ok)}
+
+.tcard{background:var(--card);border-radius:var(--rs);padding:9px 11px;margin-bottom:6px;box-shadow:0 1px 2px rgba(0,0,0,.04);cursor:pointer;transition:.15s;border-left:3px solid var(--border);position:relative}
+.tcard:hover{transform:translateY(-1px);box-shadow:var(--sh)}
+.tcard.overdue{background:#FEF6F4}
+.tcard-t{font-size:12px;font-weight:600;margin-bottom:5px;line-height:1.35;padding-right:24px}
+.tcard-m{font-size:10.5px;color:var(--mut);display:flex;gap:5px;align-items:center;flex-wrap:wrap}
+.tcard-line{padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:600}
+.ddl-tag{padding:1px 6px;border-radius:3px;background:var(--border-s);font-size:10px;font-weight:600}
+.ddl-tag.urg{background:var(--err-bg);color:var(--err)}
+.ddl-tag.soon{background:var(--warn-bg);color:#7A5A14}
+.tcard-attach{position:absolute;top:8px;right:8px;font-size:11px;color:var(--ok);font-weight:600}
+.tcard-who{display:flex;align-items:center;gap:4px;margin-top:5px;padding-top:5px;border-top:1px dashed var(--border-s);font-size:10.5px}
+.avatar{width:26px;height:26px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-weight:600;font-size:11px;flex-shrink:0;background:linear-gradient(135deg,var(--pri),var(--pri-l))}
+.avatar.admin{background:linear-gradient(135deg,var(--acc),#E0B361)}
+
+.st{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;display:inline-flex;align-items:center;gap:3px}
+.st-unclaimed{background:var(--border-s);color:var(--txt2)}
+.st-doing{background:var(--info-bg);color:var(--info)}
+.st-review{background:var(--warn-bg);color:#7A5A14}
+.st-rework{background:var(--err-bg);color:var(--err)}
+.st-done{background:var(--ok-bg);color:var(--ok)}
+
+.res-toolbar{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+.res-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+.res-card{padding:12px;display:flex;flex-direction:column;gap:8px;transition:.15s}
+.res-card:hover{transform:translateY(-2px);box-shadow:var(--sh-l);border-color:var(--pri-l)}
+.res-icon{width:36px;height:36px;border-radius:var(--rs);display:flex;align-items:center;justify-content:center;font-size:16px;background:var(--sec-bg);color:var(--sec);flex-shrink:0}
+.res-name{font-size:12.5px;font-weight:600;line-height:1.4;word-break:break-all}
+.res-meta{font-size:10.5px;color:var(--mut);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+
+.ann-list{display:flex;flex-direction:column;gap:10px}
+.ann{padding:14px 16px;position:relative}
+.ann.pinned{border-left:3px solid var(--acc);background:#FFFCF4}
+.ann-h{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.ann-title{font-size:14px;font-weight:600;flex:1}
+.ann-pin{color:var(--acc);font-size:14px}
+.ann-body{font-size:13px;color:var(--txt2);line-height:1.65}
+.ann-body p{margin:4px 0}
+.ann-body ul,.ann-body ol{margin:4px 0 4px 20px}
+.ann-body strong{color:var(--txt)}
+.ann-meta{font-size:11px;color:var(--mut);margin-top:8px;padding-top:8px;border-top:1px solid var(--border-s);display:flex;gap:8px;align-items:center}
+
+.rev-list{display:flex;flex-direction:column;gap:10px}
+.rev{padding:13px 15px}
+.rev-h{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.rev-task{font-size:12px;color:var(--sec);background:var(--sec-bg);padding:2px 8px;border-radius:10px;font-weight:500;cursor:pointer}
+.rev-task:hover{background:var(--sec);color:#fff}
+.rev-body{font-size:13px;color:var(--txt);line-height:1.6;padding:9px 12px;background:var(--bg);border-radius:var(--rs);border-left:2px solid var(--border);white-space:pre-wrap}
+.rev-foot{margin-top:9px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--mut)}
+.rev-resolution{padding:2px 9px;border-radius:10px;font-size:10.5px;font-weight:600}
+.res-pending{background:var(--warn-bg);color:#7A5A14}
+.res-accepted{background:var(--ok-bg);color:var(--ok)}
+.res-rejected{background:var(--err-bg);color:var(--err)}
+.rev-admin-actions{margin-left:auto;display:flex;gap:5px}
+
+.mask{position:fixed;inset:0;background:rgba(42,35,29,.4);z-index:500;display:none;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(2px)}
+.mask.on{display:flex}
+.modal{background:var(--card);border-radius:12px;max-width:820px;width:100%;box-shadow:var(--sh-l);max-height:92vh;display:flex;flex-direction:column;animation:mIn .18s ease-out}
+@keyframes mIn{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+.modal-h{padding:14px 20px;border-bottom:1px solid var(--border-s);display:flex;align-items:center;gap:10px;flex-shrink:0}
+.modal-t{font-size:15px;font-weight:600;flex:1;line-height:1.4}
+.modal-x{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;color:var(--mut);flex-shrink:0}
+.modal-x:hover{background:var(--border-s)}
+.modal-b{padding:16px 20px;overflow-y:auto;flex:1}
+.modal-f{padding:11px 20px;border-top:1px solid var(--border-s);display:flex;justify-content:flex-end;gap:8px;background:#FAF6F0;border-radius:0 0 12px 12px;flex-shrink:0;flex-wrap:wrap}
+.fg{margin-bottom:12px}
+.fl{display:block;font-size:11px;font-weight:600;color:var(--txt2);margin-bottom:5px;text-transform:uppercase;letter-spacing:.3px}
+.fi,.ft,.fs{width:100%;padding:8px 11px;border:1.5px solid var(--border);border-radius:var(--rs);background:var(--card);outline:none;font-size:13px;font-family:inherit}
+.fi:focus,.ft:focus,.fs:focus{border-color:var(--pri)}
+.ft{resize:vertical;min-height:70px;line-height:1.55}
+.fr3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+@media(max-width:600px){.fr3{grid-template-columns:1fr}}
+
+.td-grid{display:grid;grid-template-columns:1.5fr 1fr;gap:16px}
+@media(max-width:820px){.td-grid{grid-template-columns:1fr}}
+.td-section{margin-bottom:16px}
+.td-section-h{font-size:11px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.td-info{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:10px 12px;background:var(--bg);border-radius:var(--rs);font-size:12px}
+.td-info-item{display:flex;flex-direction:column;gap:2px}
+.td-info-l{font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.4px;font-weight:600}
+.td-info-v{font-size:12.5px;color:var(--txt);font-weight:500}
+
+.status-flow{display:flex;flex-wrap:wrap;gap:5px;padding:10px 12px;background:var(--bg);border-radius:var(--rs)}
+.status-btn{padding:5px 10px;border-radius:var(--rs);font-size:11px;font-weight:500;border:1.5px solid var(--border);background:var(--card);transition:.15s;display:inline-flex;align-items:center;gap:4px}
+.status-btn:hover:not(:disabled){transform:translateY(-1px);box-shadow:var(--sh)}
+.status-btn:disabled{opacity:.35;cursor:not-allowed}
+.status-btn.current{border-color:var(--pri);background:var(--pri-bg);color:var(--pri);font-weight:600}
+.status-btn.to-doing{border-color:var(--info);color:var(--info)}
+.status-btn.to-review{border-color:var(--warn);color:#7A5A14}
+.status-btn.to-rework{border-color:var(--err);color:var(--err)}
+.status-btn.to-done{border-color:var(--ok);color:var(--ok)}
+
+.attach-drop{border:2px dashed var(--border);border-radius:var(--rs);padding:16px;text-align:center;background:var(--bg);cursor:pointer;transition:.15s;font-size:12px;color:var(--mut)}
+.attach-drop:hover{border-color:var(--pri);background:var(--pri-bg);color:var(--pri)}
+.attach-drop.drag{border-color:var(--pri);background:var(--pri-bg)}
+.attach-list{margin-top:8px;display:flex;flex-direction:column;gap:5px}
+.attach-item{padding:7px 10px;background:var(--bg);border-radius:var(--rs);display:flex;align-items:center;gap:8px;font-size:11.5px}
+.attach-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--txt)}
+.attach-size{color:var(--mut);font-size:10.5px}
+.attach-actions{display:flex;gap:4px;flex-shrink:0}
+
+.comment-list{max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
+.comment{padding:8px 11px;background:var(--bg);border-radius:var(--rs);font-size:12px;border-left:2px solid var(--border)}
+.comment.rework{border-left-color:var(--err);background:var(--err-bg)}
+.comment-h{display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:11px}
+.comment-who{font-weight:600;color:var(--txt)}
+.comment-tag{padding:1px 6px;border-radius:8px;font-size:9.5px;font-weight:600;background:var(--err);color:#fff}
+.comment-time{margin-left:auto;color:var(--mut);font-size:10px}
+.comment-body{color:var(--txt2);line-height:1.55;white-space:pre-wrap;word-break:break-word}
+.comment-input{display:flex;gap:6px}
+.comment-input textarea{flex:1;padding:7px 10px;border:1.5px solid var(--border);border-radius:var(--rs);background:var(--card);outline:none;font-size:12px;resize:vertical;min-height:38px;font-family:inherit}
+.comment-input textarea:focus{border-color:var(--pri)}
+
+.toasts{position:fixed;top:16px;right:16px;z-index:900;display:flex;flex-direction:column;gap:6px;pointer-events:none}
+.toast{background:var(--card);border-radius:var(--r);padding:10px 15px;box-shadow:var(--sh-l);border-left:3px solid var(--pri);font-size:12px;min-width:220px;max-width:340px;animation:tIn .18s ease-out;pointer-events:auto}
+.toast.ok{border-left-color:var(--ok)}.toast.err{border-left-color:var(--err)}.toast.w{border-left-color:var(--warn)}
+@keyframes tIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
+
+.empty{text-align:center;padding:32px 16px;color:var(--mut);font-size:12px}
+.empty-icon{font-size:32px;margin-bottom:8px;opacity:.35}
+.hint{font-size:11px;color:var(--mut);line-height:1.55;padding:8px 10px;background:var(--bg);border-radius:var(--rs);margin-top:6px}
+.hint strong{color:var(--txt2)}
+.tag{display:inline-block;padding:1px 7px;border-radius:8px;font-size:10px;background:var(--border-s);color:var(--txt2);font-weight:500}
+.tag-p{background:var(--pri-bg);color:var(--pri)}
+.tag-i{background:var(--info-bg);color:var(--info)}
+
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.stat{padding:12px 14px;position:relative;overflow:hidden}
+.stat::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--pri)}
+.stat.w::before{background:var(--warn)}.stat.i::before{background:var(--sec)}.stat.g::before{background:var(--ok)}.stat.e::before{background:var(--err)}
+.stat-n{font-size:22px;font-weight:700;margin:3px 0 1px;line-height:1.1}
+.stat-l{font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;font-weight:600}
+.stat-d{font-size:10.5px;color:var(--txt2);margin-top:2px}
+
+.dash-cols{display:grid;grid-template-columns:1.4fr 1fr;gap:14px}
+@media(max-width:1000px){.dash-cols{grid-template-columns:1fr}}
+.dash-list-item{padding:9px 0;border-bottom:1px solid var(--border-s);display:flex;gap:9px;align-items:flex-start;font-size:12px;cursor:pointer}
+.dash-list-item:last-child{border:none}
+.dash-list-item:hover{background:var(--bg);margin:0 -8px;padding-left:8px;padding-right:8px;border-radius:4px}
+
+.dtabs{display:flex;gap:2px;border-bottom:1px solid var(--border-s);margin:0 -20px;padding:0 16px;margin-bottom:14px}
+.dtab{padding:8px 14px;font-size:13px;color:var(--mut);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.dtab:hover{color:var(--txt)}
+.dtab.on{color:var(--pri);border-bottom-color:var(--pri);font-weight:600}
+.docview{display:grid;grid-template-columns:1.5fr 1fr;gap:14px;align-items:start}
+@media(max-width:900px){.docview{grid-template-columns:1fr}}
+.doc-toolbar{padding:8px 14px;background:#FAF6F0;border-bottom:1px solid var(--border-s);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.md-body{padding:20px 24px;max-height:62vh;overflow-y:auto;line-height:1.75;font-size:13.5px}
+.md-body h1{font-size:19px;color:var(--pri);margin:14px 0 8px;border-bottom:1px solid var(--border-s);padding-bottom:5px}
+.md-body h2{font-size:16px;color:var(--pri);margin:12px 0 6px}
+.md-body h3{font-size:14px;margin:10px 0 4px}
+.md-body p{margin:6px 0}
+.md-body ul,.md-body ol{margin:6px 0 6px 20px}
+.md-body blockquote{border-left:3px solid var(--acc);padding:4px 12px;background:var(--acc-bg);margin:8px 0;font-style:italic;color:var(--txt2)}
+.md-body code{background:var(--border-s);padding:1px 5px;border-radius:3px;font-size:12px}
+.md-body strong{color:var(--pri)}
+.md-body table{border-collapse:collapse;width:100%;margin:8px 0}
+.md-body th,.md-body td{border:1px solid var(--border);padding:5px 8px;font-size:12px}
+.md-body th{background:var(--border-s)}
+.doc-edit-input{width:100%;border:none;outline:none;resize:vertical;min-height:300px;padding:16px 18px;background:#FDFBF7;font:13px/1.75 "JetBrains Mono",Consolas,monospace;color:var(--txt);display:block}
+.quote-chip{display:inline-flex;align-items:center;gap:5px;background:var(--acc-bg);color:#7A5A14;padding:4px 10px;border-radius:6px;font-size:11px;margin-bottom:6px;max-width:100%}
+.quote-chip .q{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px}
+.dcomment-quote{padding:4px 8px;background:var(--acc-bg);border-left:2px solid var(--acc);color:#7A5A14;font-size:11px;margin:5px 0;border-radius:3px;white-space:pre-wrap;word-break:break-word}
+.comment-action{font-size:10px;color:var(--mut);cursor:pointer;padding:2px 5px;border-radius:3px}
+.comment-action:hover{background:var(--border-s);color:var(--pri)}
+
+/* Identity welcome */
+#welcome{position:fixed;inset:0;background:linear-gradient(135deg,#FAF6F0 0%,#EFE0CC 100%);z-index:1500;display:none;align-items:center;justify-content:center;padding:20px}
+#welcome.on{display:flex}
+.wel-card{background:var(--card);border-radius:14px;box-shadow:var(--sh-l);max-width:480px;width:100%;padding:32px}
+.wel-title{font-size:20px;font-weight:600;color:var(--pri);margin-bottom:6px}
+.wel-sub{color:var(--mut);margin-bottom:22px;font-size:12.5px;line-height:1.6}
+.wel-mem{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin-bottom:16px}
+.wel-pick{padding:12px 10px;border:2px solid var(--border);border-radius:var(--r);background:var(--card);cursor:pointer;transition:.15s;text-align:left;display:flex;align-items:center;gap:9px}
+.wel-pick:hover{border-color:var(--pri-l);background:var(--pri-bg)}
+.wel-pick.on{border-color:var(--pri);background:var(--pri-bg)}
+.wel-name{font-weight:600;font-size:13px}
+.wel-role{font-size:10.5px;color:var(--mut);margin-top:1px}
+</style>
+</head>
+<body>
+<div id="loading"><div class="spinner"></div><div style="font-size:12px;color:var(--mut)">正在加载工作台...</div></div>
+
+<div id="welcome">
+  <div class="wel-card">
+    <div class="wel-title">欢迎来到小组工作台</div>
+    <div class="wel-sub">选择你的身份进入。首次使用会设置一个 <strong>4-8 位数字 PIN</strong>，之后换设备登录也要输入这个 PIN，别人就无法冒用你的身份了。</div>
+    <div class="wel-mem" id="wel-mem"></div>
+    <div id="wel-pin" style="display:none">
+      <div class="fg" style="margin-top:12px">
+        <label class="fl" id="wel-pin-label">PIN</label>
+        <input class="fi" id="wel-pin-input" type="password" inputmode="numeric" maxlength="8" placeholder="4-8 位数字" style="letter-spacing:6px;font-size:16px;text-align:center"/>
+      </div>
+      <button class="btn btn-p" style="width:100%;justify-content:center;padding:11px" id="wel-pin-btn" onclick="submitPin()">验证进入</button>
+      <button class="btn btn-g btn-sm" style="width:100%;justify-content:center;margin-top:6px" onclick="cancelPin()">← 重选身份</button>
+    </div>
+    <div style="text-align:center;margin-top:12px;font-size:10.5px;color:var(--mut)">🔒 已绑定的身份需 PIN 才能进入 · 忘记 PIN 找管理员重置</div>
+  </div>
+</div>
+
+<!-- 初始化向导：像装系统一样分步配置（内容与步骤由 app.js 的 SU 状态驱动） -->
+<div id="setup" style="position:fixed;inset:0;background:linear-gradient(135deg,#FAF6F0 0%,#EFE0CC 100%);z-index:1500;display:none;align-items:center;justify-content:center;padding:20px;overflow-y:auto">
+  <div class="wel-card" style="max-width:560px">
+    <div class="wel-title">初始化小组工作台</div>
+    <div class="wel-sub">你是第一个打开工作台的人。跟着向导几步完成配置：名称、功能模块、分类、成员与管理员。</div>
+    <div style="font-size:11px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px" id="su-step"></div>
+    <div id="su-body"></div>
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button class="btn btn-s" id="su-prev" onclick="suPrev()">← 上一步</button>
+      <button class="btn btn-p" style="margin-left:auto" id="su-next" onclick="suNext()">下一步 →</button>
+    </div>
+    <div style="text-align:center;margin-top:12px;font-size:10.5px;color:var(--mut)">初始化只有一次 · 之后管理员可随时改名和调整成员</div>
+  </div>
+</div>
+
+<div id="app">
+  <aside class="side">
+    <div class="side-head">
+      <div class="side-title" id="side-title">小组作业工作台</div>
+      <div class="side-sub" id="side-sub">Group Workbench</div>
+    </div>
+    <nav class="nav" id="nav">
+      <button class="nav-btn on" data-v="dash"><span>◎</span>总览<span class="nav-badge" id="nb-rem" style="display:none">0</span></button>
+      <button class="nav-btn" data-v="tasks"><span>▤</span>任务看板<span class="nav-badge" id="nb-task">0</span></button>
+      <button class="nav-btn" data-v="resources"><span>◈</span>资料库<span class="nav-badge" id="nb-res">0</span></button>
+      <button class="nav-btn" data-v="announcements"><span>◇</span>公告区<span class="nav-badge" id="nb-ann">0</span></button>
+      <button class="nav-btn" data-v="lits"><span>📚</span>文献汇总<span class="nav-badge" id="nb-lit">0</span></button>
+      <button class="nav-btn" data-v="reviews"><span>✎</span>审议意见<span class="nav-badge" id="nb-rev">0</span></button>
+      <button class="nav-btn" data-v="help"><span>❓</span>使用说明</button>
+    </nav>
+    <div class="side-foot">
+      <span class="sync" id="sync-dot"></span><span id="sync-txt">已同步</span><br/>
+      <span style="color:#C0B5A2">自动每 12 秒刷新</span>
+    </div>
+  </aside>
+  <div class="main">
+    <div class="top">
+      <div>
+        <div class="top-title" id="pg-title">总览</div>
+        <div class="top-sub" id="pg-sub"></div>
+      </div>
+      <div class="top-right">
+        <button class="btn btn-ghost btn-xs" id="btn-member" style="display:none" onclick="openMemberM()">👤 成员</button>
+        <button class="btn btn-ghost btn-xs" id="btn-backup" style="display:none" onclick="exportBackup()">📥 备份</button>
+        <button class="btn btn-ghost btn-xs" id="btn-restore" style="display:none" onclick="importBackup()">📤 恢复</button>
+        <span class="role-tag" id="role-tag"></span>
+        <select class="who-sel" id="who-sel" onchange="switchWho(this.value)"></select>
+      </div>
+    </div>
+    <div class="view on" id="v-dash"></div>
+    <div class="view" id="v-tasks"></div>
+    <div class="view" id="v-resources"></div>
+    <div class="view" id="v-announcements"></div>
+    <div class="view" id="v-lits"></div>
+    <div class="view" id="v-reviews"></div>
+    <div class="view" id="v-help"></div>
+    <div class="view" id="v-task-detail"></div>
+  </div>
+</div>
+
+<div class="mask" id="m-member"><div class="modal">
+  <div class="modal-h"><div class="modal-t">成员管理</div><button class="modal-x" onclick="closeM('m-member')">×</button></div>
+  <div class="modal-b">
+    <div class="hint" style="margin:0 0 12px">改名只影响之后的记录，历史评论里显示的还是当时的名字。删除成员要求其名下没有任务。</div>
+    <div id="mm-list"></div>
+    <div class="fg" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border-s)">
+      <label class="fl">添加新成员</label>
+      <div style="display:flex;gap:8px">
+        <input class="fi" id="mm-new-name" placeholder="名字" maxlength="12" style="flex:1.2"/>
+        <input class="fi" id="mm-new-role" placeholder="角色（选填，如：剪辑）" maxlength="20" style="flex:2"/>
+        <button class="btn btn-p btn-sm" onclick="memberAdd()">添加</button>
+      </div>
+    </div>
+  </div>
+  <div class="modal-f"><button class="btn btn-p" onclick="closeM('m-member')">完成</button></div>
+</div></div>
+
+<div class="mask" id="m-task"><div class="modal">
+  <div class="modal-h"><div class="modal-t" id="mt-title">新建任务</div><button class="modal-x" onclick="closeM('m-task')">×</button></div>
+  <div class="modal-b">
+    <div class="fg"><label class="fl">任务名称</label><input class="fi" id="t-name" placeholder="如：完成初稿"/></div>
+    <div class="fg"><label class="fl">任务描述</label><textarea class="ft" id="t-desc" placeholder="具体要求、交付物、注意事项..."></textarea></div>
+    <div class="fr3">
+      <div class="fg"><label class="fl">任务分类</label><select class="fs" id="t-line"></select></div>
+      <div class="fg"><label class="fl">截止日期</label><input type="date" class="fi" id="t-ddl"/></div>
+      <div class="fg"><label class="fl">负责人</label><select class="fs" id="t-assignee"></select></div>
+    </div>
+  </div>
+  <div class="modal-f">
+    <button class="btn btn-d" id="t-del" style="margin-right:auto;display:none" onclick="delTask()">删除</button>
+    <button class="btn btn-s" onclick="closeM('m-task')">取消</button>
+    <button class="btn btn-p" onclick="saveTaskEdit()">保存</button>
+  </div>
+</div></div>
+
+<div class="mask" id="m-ann"><div class="modal">
+  <div class="modal-h"><div class="modal-t">发布公告</div><button class="modal-x" onclick="closeM('m-ann')">×</button></div>
+  <div class="modal-b">
+    <div class="fg"><label class="fl">标题</label><input class="fi" id="a-title" placeholder="如：本周六下午2点线上会议"/></div>
+    <div class="fg"><label class="fl">内容</label><textarea class="ft" id="a-body" style="min-height:120px" placeholder="支持 Markdown 语法"></textarea></div>
+    <div class="fg"><label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt2);cursor:pointer"><input type="checkbox" id="a-pin"/> 置顶显示</label></div>
+  </div>
+  <div class="modal-f"><button class="btn btn-s" onclick="closeM('m-ann')">取消</button><button class="btn btn-p" onclick="saveAnn()">发布</button></div>
+</div></div>
+
+<div class="mask" id="m-rev"><div class="modal">
+  <div class="modal-h"><div class="modal-t">提交审议意见</div><button class="modal-x" onclick="closeM('m-rev')">×</button></div>
+  <div class="modal-b">
+    <div class="fg"><label class="fl">对应任务</label><select class="fs" id="r-task"></select></div>
+    <div class="fg"><label class="fl">意见人</label><input class="fi" id="r-author" disabled style="background:var(--bg);color:var(--mut)"/></div>
+    <div class="fg"><label class="fl">意见内容</label><textarea class="ft" id="r-body" style="min-height:110px" placeholder="具体说明你的建议或问题..."></textarea></div>
+    <div class="hint">意见人由系统自动记录，不可代填。提交后管理员会在"处理结果"中标注采纳/不采纳。</div>
+  </div>
+  <div class="modal-f"><button class="btn btn-s" onclick="closeM('m-rev')">取消</button><button class="btn btn-p" onclick="saveRev()">提交</button></div>
+</div></div>
+
+<div class="mask" id="m-rework"><div class="modal">
+  <div class="modal-h"><div class="modal-t" style="color:var(--err)">标记为需返工</div><button class="modal-x" onclick="closeM('m-rework')">×</button></div>
+  <div class="modal-b">
+    <div class="fg"><label class="fl">返工意见（必填，将写入评论区）</label><textarea class="ft" id="rw-body" style="min-height:110px" placeholder="请具体说明需要修改的地方、修改标准、参考建议..."></textarea></div>
+    <div class="hint">按规则要求，管理员将任务标记为「需返工」时必须在评论区写明返工意见。</div>
+  </div>
+  <div class="modal-f"><button class="btn btn-s" onclick="closeM('m-rework')">取消</button><button class="btn btn-err" onclick="confirmRework()">确认返工</button></div>
+</div></div>
+
+<!-- 上传资料弹窗：选分类 + 描述（app.js 的 _pendingUploads 队列驱动，多文件逐个确认） -->
+<div class="mask" id="m-upload"><div class="modal" style="max-width:420px">
+  <div class="modal-h"><div class="modal-t">上传资料</div><button class="modal-x" onclick="cancelUpload()">×</button></div>
+  <div class="modal-b">
+    <div class="fg" style="font-size:12px;color:var(--txt2);word-break:break-all" id="up-name"></div>
+    <div class="fg"><label class="fl">分类</label><select class="fs" id="up-cat"></select></div>
+    <div class="fg"><label class="fl">描述（选填）</label><input class="fi" id="up-desc" maxlength="200" placeholder="大文件可贴网盘链接"/></div>
+  </div>
+  <div class="modal-f"><button class="btn btn-s" onclick="cancelUpload()">取消</button><button class="btn btn-p" onclick="confirmUpload()">上传</button></div>
+</div></div>
+
+<div class="toasts" id="toasts"></div>
+<input type="file" id="file-input" multiple style="display:none"/>
+<input type="file" id="restore-input" accept=".json" style="display:none"/>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
