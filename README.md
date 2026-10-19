@@ -6,7 +6,7 @@
 一个为小组作业设计的协作工作台模板：**任务看板、交付文档（版本管理 + 划线批注）、资料库、公告区、文献汇总（共同审稿）、审议意见**，全部集成在一个页面里。
 
 - 前端：纯 HTML/CSS/JS，无构建步骤、无框架依赖
-- 后端：附零依赖 Node.js 参考实现（`server.js`，数据存 `data/state.json`）；也可按 [API.md](./API.md) 对接任意后端（Python / Go / 云函数 / Supabase 均可）
+- 后端：附 Node.js 参考实现（`server.js`，约 30 个接口全实现；默认 `STORAGE=file` 零依赖、数据存本地 `data/state.json`，设 `STORAGE=supabase` 可把数据存进 Supabase——**云部署重启不丢**）；也可按 [API.md](./API.md) 对接任意后端（Python / Go / 云函数均可）
 - 定制：**第一个打开的人走一遍初始化向导**（像装系统），功能模块、任务分类、权限规则全部点选决定
 
 ## 🚀 快速开始（3 分钟跑起来）
@@ -21,11 +21,12 @@ node server.js
 
 > 没装 Node.js？去 [nodejs.org](https://nodejs.org) 下载 LTS 版，一路 Next 即可。
 > 完全没碰过命令行、想部署给别人用？看 [DEPLOY.md](./DEPLOY.md)（保姆级教程，含图解）。
+> 想免费长期部署、数据重启不丢？看 [DEPLOY.md](./DEPLOY.md) 方案一：Render + Supabase（推荐）。
 
 **想让组员也连上来？**
 
 - **同一 WiFi 下**：组员浏览器输入 `http://你的IP:3000`（你的 IP 用 `ipconfig` 查，形如 `192.168.x.x`），防火墙放行 3000 端口即可
-- **不同网络/想让任何人都能访问**：把项目部署到免费云平台（Render），拿到 `https://xxx.onrender.com` 发群里——完整步骤见 [DEPLOY.md](./DEPLOY.md) 方案二
+- **不同网络/想让任何人都能访问**：部署到 Render + Supabase（免费），拿到 `https://xxx.onrender.com` 发群里，数据重启不丢——完整步骤见 [DEPLOY.md](./DEPLOY.md) 方案一
 
 ## 像装系统一样初始化
 
@@ -62,11 +63,13 @@ node server.js
 ```
 group-workbench/
 ├── API.md             # 后端接口说明书（想自己写后端必读）
-├── DEPLOY.md          # 保姆级部署教程（零基础，含局域网/免费云两种方案）
+├── DEPLOY.md          # 保姆级部署教程（零基础，含两种方案）
 ├── README.md
 ├── LICENSE            # CC BY-NC 4.0
 ├── .gitignore
-├── server.js          # 零依赖 Node.js 参考后端（约 30 个接口全实现）
+├── server.js          # Node.js 参考后端（STORAGE=file / supabase 两种存储）
+├── backend/supabase/
+│   └── schema.sql     # Supabase 建表脚本（云部署用，SQL Editor 粘贴执行）
 └── public/            # 前端（原样部署即可）
     ├── index.html
     ├── app.js

@@ -49,7 +49,14 @@ function emptyState() {
   };
 }
 
-function loadState() {
+/* ---------- 存储适配层 ----------
+ * file（默认）  ：同步读写 data/state.json，零依赖，行为与 v1 完全一致
+ * supabase     ：懒加载 @supabase/supabase-js，数据存 Supabase（云部署重启不丢），
+ *                建表脚本 backend/supabase/schema.sql，RLS 只放行 service_role
+ * 上层业务代码只认 loadState / loadStateAsync / saveState / persistNow 四个入口 */
+const STORAGE = (process.env.STORAGE || 'file').toLowerCase();
+
+function fileLoad() {
   try {
     DB = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     // 兼容缺字段
@@ -59,20 +66,117 @@ function loadState() {
     DB = emptyState();
   }
 }
+function filePersistNow() {
+  // 原子写：先写临时文件再改名，避免写一半断电损坏
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = DATA_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(DB));
+  fs.renameSync(tmp, DATA_FILE);
+}
 
+/* ---- supabase 实现（仅 STORAGE=supabase 时才 require，file 模式不用装依赖）---- */
+let _sb = null;
+function sb() {
+  if (_sb) return _sb;
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY)
+    throw new Error('STORAGE=supabase 需要设置 SUPABASE_URL 和 SUPABASE_SERVICE_KEY 环境变量');
+  const { createClient } = require('@supabase/supabase-js');   // 懒加载
+  _sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY, { auth: { persistSession: false } });
+  return _sb;
+}
+/* 表映射：命名列仅供人工查表，data JSONB 列才是应用读写的权威载荷 */
+const SB_TABLES = {
+  members:      m => ({ id: m.id, name: m.name, role: m.role, is_admin: !!m.isAdmin, pin_salt: m.pinSalt || null, pin_hash: m.pinHash || null, data: m, updated_at: new Date().toISOString() }),
+  tasks:        t => ({ id: t.id, title: t.title, line: t.line, ddl: t.ddl || null, assignee_id: t.assigneeId || null, status: t.status, sort_order: Number(t.order) || 0, comments: t.comments || [], attachments: t.attachments || [], doc: t.doc || { versions: [], comments: [] }, data: t, updated_at: new Date().toISOString() }),
+  resources:    r => ({ id: r.id, name: r.name, cat: r.cat, uploaded_by: r.uploadedBy || null, data: r, uploaded_at: new Date(Number(r.uploadedAt) || Date.now()).toISOString() }),
+  announcements:a => ({ id: a.id, title: a.title, pinned: !!a.pinned, author_id: a.authorId || null, data: a, ts: new Date(Number(a.ts) || Date.now()).toISOString() }),
+  literatures:  x => ({ id: x.id, title: x.title, adopted: !!x.adopted, author_id: x.authorId || null, votes: x.votes || {}, comments: x.comments || [], data: x, ts: new Date(Number(x.ts) || Date.now()).toISOString() }),
+  reviews:      r => ({ id: r.id, task_id: r.taskId || null, author_id: r.authorId || null, resolution: r.resolution || 'pending', data: r, ts: new Date(Number(r.ts) || Date.now()).toISOString() })
+};
+
+async function sbLoad() {
+  const c = sb();
+  const fresh = emptyState();
+  const st = await c.from('settings').select('data').eq('id', 1).maybeSingle();
+  if (st.error) throw new Error('读取 settings 失败：' + st.error.message);
+  if (st.data && st.data.data && typeof st.data.data === 'object') fresh.settings = st.data.data;
+  for (const name of Object.keys(SB_TABLES)) {
+    const r = await c.from(name).select('data');
+    if (r.error) throw new Error('读取 ' + name + ' 失败：' + r.error.message);
+    fresh[name] = (r.data || []).map(x => x && x.data).filter(Boolean);
+  }
+  const dm = await c.from('dismissed').select('member_id,key,ts');
+  if (dm.error) throw new Error('读取 dismissed 失败：' + dm.error.message);
+  (dm.data || []).forEach(x => { (fresh.dismissed[x.member_id] = fresh.dismissed[x.member_id] || {})[x.key] = Number(x.ts) || 0; });
+  const ss = await c.from('sessions').select('token,member_id,ts');
+  if (ss.error) throw new Error('读取 sessions 失败：' + ss.error.message);
+  (ss.data || []).forEach(x => { fresh.sessions[x.token] = { memberId: x.member_id, ts: Number(x.ts) || 0 }; });
+  DB = fresh;
+}
+
+/* 增量同步：只上传内容有变化的行、删除远端多出的行，避免每次全量重传 base64 附件 */
+const sbLast = {};
+async function sbSyncTable(name, rows) {
+  const c = sb(); const toRow = SB_TABLES[name];
+  const prev = sbLast[name] || new Map();
+  const curr = new Map(rows.map(r => [r.id, JSON.stringify(r)]));
+  const upsertRows = [];
+  for (const [id, json] of curr) {
+    if (prev.get(id) !== json) upsertRows.push(toRow(rows.find(r => r.id === id)));
+  }
+  if (upsertRows.length) {
+    const r = await c.from(name).upsert(upsertRows);
+    if (r.error) throw new Error('写入 ' + name + ' 失败：' + r.error.message);
+  }
+  const del = [...prev.keys()].filter(id => !curr.has(id));
+  if (del.length) {
+    const r = await c.from(name).delete().in('id', del);
+    if (r.error) throw new Error('删除 ' + name + ' 失败：' + r.error.message);
+  }
+  sbLast[name] = curr;
+}
+
+let sbSaveChain = Promise.resolve();   // 串行化保存，避免并发 upsert 交错
+async function sbSave() {
+  const c = sb();
+  const s = await c.from('settings').upsert({ id: 1, data: DB.settings || {}, updated_at: new Date().toISOString() });
+  if (s.error) throw new Error('写入 settings 失败：' + s.error.message);
+  for (const name of Object.keys(SB_TABLES)) await sbSyncTable(name, DB[name]);
+  /* dismissed / sessions 是无独立行 id 的小表：整体重建 */
+  const d = await c.from('dismissed').delete().neq('member_id', '');
+  if (d.error) throw new Error('清空 dismissed 失败：' + d.error.message);
+  const drows = [];
+  Object.entries(DB.dismissed || {}).forEach(([mid, keys]) => {
+    Object.entries(keys || {}).forEach(([k, ts]) => drows.push({ member_id: mid, key: k, ts: Number(ts) || 0 }));
+  });
+  if (drows.length) {
+    const r = await c.from('dismissed').insert(drows);
+    if (r.error) throw new Error('写入 dismissed 失败：' + r.error.message);
+  }
+  const sv = await c.from('sessions').delete().neq('token', '');
+  if (sv.error) throw new Error('清空 sessions 失败：' + sv.error.message);
+  const srows = Object.entries(DB.sessions || {}).map(([token, v]) => ({ token, member_id: v.memberId, ts: Number(v.ts) || 0 }));
+  if (srows.length) {
+    const r = await c.from('sessions').insert(srows);
+    if (r.error) throw new Error('写入 sessions 失败：' + r.error.message);
+  }
+}
+
+/* ---- 统一入口 ---- */
+function loadState() { fileLoad(); }                    // file 模式（同步）
+async function loadStateAsync() { await sbLoad(); }     // supabase 模式（异步，启动时调用）
 function saveState() {
-  // 合并写：延迟 200ms 防抖，先写临时文件再改名，避免写一半断电损坏
+  // 合并写：延迟 200ms 防抖（file 与 supabase 共用）
   if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try {
-      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-      const tmp = DATA_FILE + '.tmp';
-      fs.writeFileSync(tmp, JSON.stringify(DB));
-      fs.renameSync(tmp, DATA_FILE);
-    } catch (e) {
-      console.error('[保存失败]', e.message);
-    }
-  }, 200);
+  saveTimer = setTimeout(persistNow, 200);
+}
+function persistNow() {
+  saveTimer = null;
+  if (STORAGE === 'supabase') {
+    sbSaveChain = sbSaveChain.then(sbSave).catch(e => console.error('[保存失败]', e.message));
+    return;
+  }
+  try { filePersistNow(); } catch (e) { console.error('[保存失败]', e.message); }
 }
 
 /* 暴露给前端的 state：剥掉 PIN 哈希等敏感字段 */
@@ -858,44 +962,51 @@ async function handleApi(req, res, pathname) {
 }
 
 /* ============ 启动 ============ */
-loadState();
-
 /* 退出前把防抖挂起的写盘刷出去，避免 Ctrl+C 丢最后 200ms 的改动 */
 function flushAndExit() {
-  if (saveTimer) {
-    clearTimeout(saveTimer); saveTimer = null;
-    try {
-      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-      const tmp = DATA_FILE + '.tmp';
-      fs.writeFileSync(tmp, JSON.stringify(DB));
-      fs.renameSync(tmp, DATA_FILE);
-    } catch (e) { console.error('[退出保存失败]', e.message); }
+  if (saveTimer) { clearTimeout(saveTimer); persistNow(); }
+  if (STORAGE === 'supabase') {
+    // 等串行保存链落完（5 秒兜底）再退出
+    const guard = setTimeout(() => process.exit(0), 5000);
+    sbSaveChain.finally(() => { clearTimeout(guard); process.exit(0); });
+    return;
   }
   process.exit(0);
 }
 process.on('SIGINT', flushAndExit);
 process.on('SIGTERM', flushAndExit);
 
-const server = http.createServer((req, res) => {
-  const pathname = new URL(req.url, 'http://x').pathname;
-  if (pathname.startsWith('/api/')) {
-    handleApi(req, res, pathname).catch(e => {
-      console.error('[请求失败]', e);
-      try { sendJson(res, 400, { error: e.message }); } catch (_) {}
-    });
-    return;
-  }
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    res.writeHead(405); res.end('Method Not Allowed'); return;
-  }
-  serveStatic(req, res, pathname);
-});
+function startListen() {
+  const server = http.createServer((req, res) => {
+    const pathname = new URL(req.url, 'http://x').pathname;
+    if (pathname.startsWith('/api/')) {
+      handleApi(req, res, pathname).catch(e => {
+        console.error('[请求失败]', e);
+        try { sendJson(res, 400, { error: e.message }); } catch (_) {}
+      });
+      return;
+    }
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.writeHead(405); res.end('Method Not Allowed'); return;
+    }
+    serveStatic(req, res, pathname);
+  });
 
-server.listen(PORT, () => {
-  console.log('');
-  console.log('  小组作业工作台已启动');
-  console.log('  本机访问:   http://localhost:' + PORT);
-  console.log('  局域网访问: http://' + (require('os').hostname() || '本机IP') + ':' + PORT + ' （组员连同一 WiFi 可访问）');
-  console.log('  数据目录:   ' + DATA_DIR);
-  console.log('');
-});
+  server.listen(PORT, () => {
+    console.log('');
+    console.log('  小组作业工作台已启动');
+    console.log('  本机访问:   http://localhost:' + PORT);
+    console.log('  局域网访问: http://' + (require('os').hostname() || '本机IP') + ':' + PORT + ' （组员连同一 WiFi 可访问）');
+    console.log('  存储模式:   ' + STORAGE + (STORAGE === 'supabase' ? '（数据存 Supabase，重启不丢）' : '（数据存 ' + DATA_DIR + '）'));
+    console.log('');
+  });
+}
+
+if (STORAGE === 'supabase') {
+  loadStateAsync()
+    .then(startListen)
+    .catch(e => { console.error('[启动失败] Supabase 连接或读取异常：' + e.message); process.exit(1); });
+} else {
+  loadState();        // file 模式：同步加载，行为与 v1 完全一致
+  startListen();
+}
