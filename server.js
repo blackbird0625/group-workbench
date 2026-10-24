@@ -11,14 +11,18 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
 
-const PORT = process.env.PORT || 3000;
+const portFlag = process.argv.indexOf('--port');
+const CLI_PORT = portFlag === -1 ? null : process.argv[portFlag + 1];
+const PORT = process.env.PORT || CLI_PORT || 3000;
 const PUB_DIR = path.resolve(process.env.PUB_DIR || path.join(__dirname, 'public'));   // 可用环境变量指定前端目录
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'state.json');
 const MAX_BODY = 10 * 1024 * 1024;   // 请求体上限 10MB（6MB 文件 base64 后约 8MB）
 const COOKIE_NAME = 'wb_session';
 const YEAR_SECONDS = 365 * 24 * 3600;
+const SETUP_KEY = process.env.SETUP_KEY || crypto.randomBytes(16).toString('hex');
 
 /* ============ 工具 ============ */
 const uid = () => Date.now().toString(36) + crypto.randomBytes(4).toString('hex');
@@ -195,6 +199,16 @@ function publicState() {
     dismissed: DB.dismissed
   };
 }
+/* 未登录只能取得登录页需要的最小信息，绝不携带任务、文档或附件。 */
+function anonymousState() {
+  return {
+    setupDone: DB.setupDone,
+    settings: DB.settings || {},
+    members: DB.members.map(m => ({
+      id: m.id, name: m.name, role: m.role, isAdmin: !!m.isAdmin, pinBound: !!m.pinHash
+    }))
+  };
+}
 
 /* 备份导出用：完整数据（含 pinSalt/pinHash），仅排除 sessions */
 function backupState() {
@@ -331,9 +345,15 @@ function validDataUrl(dataUrl) {
   return typeof dataUrl === 'string' && /^data:[\w./+-]*;base64,[A-Za-z0-9+/=]+$/.test(dataUrl);
 }
 
-/* ---- 初始化（新版向导：成员数组 + 设置，全部由第一个打开的人决定） ---- */
+/* ---- 初始化（新版向导：成员数组 + 设置，由持有初始化密钥的人决定） ---- */
+function setupKeyMatches(input) {
+  const expected = Buffer.from(SETUP_KEY);
+  const provided = Buffer.from(String(input || ''));
+  return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+}
 function apiSetup(body) {
   if (DB.setupDone) throw new ApiError('工作台已初始化过，不能重复初始化', 403);
+  if (!setupKeyMatches(body.setupKey)) throw new ApiError('初始化密钥不正确', 403);
   const list = Array.isArray(body.members) ? body.members : [];
   const members = list
     .map(m => ({ name: String((m && m.name) || '').trim().slice(0, 12), admin: !!(m && m.admin) }))
@@ -509,18 +529,31 @@ function apiTaskClaim(id) {
   saveState();
   return { task: t };
 }
+const TASK_TRANSITIONS = {
+  unclaimed: ['doing'],
+  doing: ['review'],
+  review: ['rework', 'done'],
+  rework: ['doing'],
+  done: []
+};
 function apiTaskStatus(id, body) {
   const { member } = requireAuthProxy();
   const t = getTask(id);
   if (!t) throw new ApiError('任务不存在', 404);
+  const from = t.status;
   const to = String(body.status || '');
-  if (to === t.status) throw new ApiError('已经是该状态');
+  if (to === from) throw new ApiError('已经是该状态');
+  if (!Object.prototype.hasOwnProperty.call(TASK_TRANSITIONS, to)) throw new ApiError('未知状态');
   if (to === 'unclaimed') throw new ApiError('任务不能被退回待认领');
+  if (!(TASK_TRANSITIONS[from] || []).includes(to))
+    throw new ApiError('当前状态不能变更为该状态');
   const isOwner = t.assigneeId === member.id;
 
   if (to === 'doing') {
-    if (!(t.status === 'unclaimed' || (t.status === 'rework' && isOwner) || member.isAdmin))
-      throw new ApiError('仅本人或管理员可以调整');
+    if (from === 'rework' && !isOwner && !member.isAdmin)
+      throw new ApiError('仅本人或管理员可以调整', 403);
+    // 与 claim 接口保持相同语义，避免产生“进行中但无负责人”的任务。
+    if (from === 'unclaimed') t.assigneeId = member.id;
   } else if (to === 'review') {
     if (!isOwner && !member.isAdmin) throw new ApiError('仅负责人本人可以提交审核', 403);
     const hasDoc = t.doc && t.doc.versions && t.doc.versions.length > 0;
@@ -533,13 +566,13 @@ function apiTaskStatus(id, body) {
     t.comments.push({ id: uid(), authorId: member.id, authorName: member.name, content: note, ts: now(), type: 'rework' });
   } else if (to === 'done') {
     requirePerm(member, 'markDone');
-  } else {
-    throw new ApiError('未知状态');
   }
   t.status = to;
   t.updatedAt = now();
   if (to !== 'rework') {
-    const label = { doing: '进入进行中', review: '提交了审核', done: '验收通过，任务完成' }[to];
+    const label = from === 'unclaimed' && to === 'doing'
+      ? '认领了任务'
+      : { doing: '进入进行中', review: '提交了审核', done: '验收通过，任务完成' }[to];
     t.comments.push(sysComment(member.name + ' ' + label));
   }
   saveState();
@@ -862,15 +895,19 @@ function apiRestore(body) {
   return { state: publicState() };
 }
 
-/* requireAuth 需要 req，这里用一个小桥接（路由层先解析再调用业务函数） */
-let _currentReq = null;
+/* 请求身份按异步调用链隔离，不能在进程级全局变量里保存“当前请求”。 */
+const requestContext = new AsyncLocalStorage();
 function requireAuthProxy() {
-  return requireAuth(_currentReq);
+  const req = requestContext.getStore();
+  if (!req) throw new ApiError('请求上下文不可用', 500);
+  return requireAuth(req);
 }
 
 /* ============ 路由 ============ */
 async function handleApi(req, res, pathname) {
-  _currentReq = req;
+  return requestContext.run(req, () => handleApiInContext(req, res, pathname));
+}
+async function handleApiInContext(req, res, pathname) {
   const method = req.method;
   let body = {};
   if (method === 'POST' || method === 'PATCH' || method === 'PUT') body = await readBody(req);
@@ -878,9 +915,14 @@ async function handleApi(req, res, pathname) {
   const root = seg[0] || '';
 
   try {
-    /* 公开接口 */
+    /* bootstrap 对匿名访问只返回登录页摘要；登录后才返回完整工作状态。 */
     if (root === 'bootstrap' && method === 'GET') {
-      return sendJson(res, 200, { ok: true, serverTime: now(), state: publicState() });
+      const token = req.headers['x-session'] || parseCookies(req)[COOKIE_NAME];
+      const authenticated = !!memberFromToken(token);
+      return sendJson(res, 200, {
+        ok: true, serverTime: now(), authenticated,
+        state: authenticated ? publicState() : anonymousState()
+      });
     }
     if (root === 'setup' && method === 'POST') {
       return sendJson(res, 200, apiSetup(body));
@@ -998,6 +1040,7 @@ function startListen() {
     console.log('  本机访问:   http://localhost:' + PORT);
     console.log('  局域网访问: http://' + (require('os').hostname() || '本机IP') + ':' + PORT + ' （组员连同一 WiFi 可访问）');
     console.log('  存储模式:   ' + STORAGE + (STORAGE === 'supabase' ? '（数据存 Supabase，重启不丢）' : '（数据存 ' + DATA_DIR + '）'));
+    if (!DB.setupDone) console.log('  初始化密钥: ' + SETUP_KEY + ' （仅首次初始化需要，请勿发到组员群）');
     console.log('');
   });
 }

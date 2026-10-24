@@ -1,0 +1,14 @@
+{
+  "name": "group-workbench",
+  "version": "1.0.0",
+  "private": true,
+  "description": "面向学生小组作业的协作工作台",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node --test tests/auth-context.test.js tests/task-status.test.js tests/access-control.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

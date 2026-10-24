@@ -83,13 +83,14 @@ SQL 已经在仓库里给人写好了，你只需要复制粘贴，一个字都�
 | Start Command | `node server.js` |
 | Instance Type | **Free** |
 
-4. **关键一步**：往下找到 **Environment Variables**，添加三条：
+4. **关键一步**：往下找到 **Environment Variables**，添加四条：
 
 | Key | Value |
 |---|---|
 | `STORAGE` | `supabase` |
 | `SUPABASE_URL` | 刚才的 Project URL |
 | `SUPABASE_SERVICE_KEY` | 刚才的 service_role key |
+| `SETUP_KEY` | 自己生成的一串随机初始化密钥，只首次配置使用，不要发到组员群 |
 
 5. 点 **Create Web Service**，等几分钟部署完成
 
@@ -101,11 +102,11 @@ SQL 已经在仓库里给人写好了，你只需要复制粘贴，一个字都�
 https://my-workbench.onrender.com
 ```
 
-**这就是登录地址**，直接发群里。组员任何网络都能打开，你的电脑开不开机都无所谓。
+这就是登录地址。先自己打开，用刚才设置的 `SETUP_KEY` 完成初始化，再把网址发到组员群。组员任何网络都能打开，你的电脑开不开机都无所谓。
 
 ### 7. 验证数据真的存在 Supabase（强烈建议做一次）
 
-1. 打开你的 Render 网址，完成初始化向导，随便建一个任务
+1. 打开你的 Render 网址，在初始化向导第一步填写 `SETUP_KEY`，完成配置后随便建一个任务
 2. 回到 Supabase 控制台 → 左侧 **Table Editor** → 点 **tasks** 表 → 能看到你刚建的任务 = 数据落库成功
 3. **终极测试**：Render 控制台点 Manual Deploy → Restart，刷新网址，数据和登录状态还在 = 配置成功，从此不怕重启
 
@@ -154,6 +155,7 @@ node server.js
   本机访问:   http://localhost:3000
   局域网访问: http://你的电脑名:3000 （组员连同一 WiFi 可访问）
   存储模式:   file（数据存 ...\data）
+  初始化密钥: 一串随机字符（仅首次初始化需要）
 ```
 
 **保持这个黑窗口开着不要关**（关了网站就下线了）。想最小化可以，别点 × 。
@@ -166,7 +168,7 @@ node server.js
 http://localhost:3000
 ```
 
-能出现初始化向导 = 一切正常。第一个打开的人（建议是你）把向导走完。
+能出现初始化向导 = 一切正常。把黑窗口里的**初始化密钥**填进第一步，然后由你完成向导。密钥不要发到组员群。
 
 ### 4. 查到你的网址（发给组员用）
 

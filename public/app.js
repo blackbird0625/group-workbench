@@ -122,7 +122,7 @@ async function api(path,opts={}){
   return data;
 }
 async function bootstrap(){
-  const res=await fetch('/api/bootstrap');
+  const res=await fetch('/api/bootstrap',{headers:token?{'X-Session':token}:{}});
   const data=await res.json();
   if(!data.ok)throw new Error('加载失败');
   S=data.state;
@@ -213,7 +213,7 @@ const SU_RESCAT_PRESETS=[  // [方案名, 资料分类名列表]
 ];
 function showSetup(){
   const def=window.WB_CONFIG||{};
-  SU={step:0,title:def.title||'小组作业工作台',subtitle:def.subtitle||'',
+  SU={step:0,title:def.title||'小组作业工作台',subtitle:def.subtitle||'',setupKey:'',
       adminLabel:def.adminLabel||'组长',members:[{name:'',admin:true}],modules:{},perms:{},lines:[],resCats:[]};
   SU_OPTS.forEach(o=>SU.modules[o[0]]=true);                                    // 可选模块默认全开
   SU_PERMS.forEach(p=>SU.perms[p[0]]=(def.perms&&def.perms[p[0]])==='all');     // 权限默认按预设（均为仅管理员）
@@ -228,7 +228,8 @@ function suRender(){
   $('#su-next').textContent=SU.step===SU_STEPS.length-1?'创建工作台':'下一步 →';
   let h='';
   if(SU.step===0){
-    h='<div class="fg"><label class="fl">工作台名称</label><input class="fi" id="su-title" maxlength="30" value="'+esc(SU.title)+'" placeholder="如：期末视频项目工作台"/></div>'+
+    h='<div class="fg"><label class="fl">初始化密钥</label><input class="fi" id="su-key" type="password" value="'+esc(SU.setupKey)+'" placeholder="启动窗口或部署日志中的初始化密钥" autocomplete="off"/><div class="hint">防止陌生人抢先初始化。密钥只首次使用，可在服务端通过 SETUP_KEY 环境变量指定。</div></div>'+
+      '<div class="fg"><label class="fl">工作台名称</label><input class="fi" id="su-title" maxlength="30" value="'+esc(SU.title)+'" placeholder="如：期末视频项目工作台"/></div>'+
       '<div class="fg"><label class="fl">副标题（选填）</label><input class="fi" id="su-subtitle" maxlength="40" value="'+esc(SU.subtitle)+'" placeholder="显示在名称下方的小字"/></div>'+
       '<div class="fg"><label class="fl">管理员称呼（只影响显示）</label><input class="fi" id="su-alabel" maxlength="10" value="'+esc(SU.adminLabel)+'" placeholder="如：组长 / 队长 / 负责人"/></div>';
   }else if(SU.step===1){
@@ -302,8 +303,8 @@ function suCollectMems(){
 }
 function suCollect(){
   if(SU.step===0){
-    const t=$('#su-title'),s=$('#su-subtitle'),a=$('#su-alabel');
-    if(t)SU.title=t.value;if(s)SU.subtitle=s.value;if(a)SU.adminLabel=a.value;
+    const t=$('#su-title'),s=$('#su-subtitle'),a=$('#su-alabel'),k=$('#su-key');
+    if(t)SU.title=t.value;if(s)SU.subtitle=s.value;if(a)SU.adminLabel=a.value;if(k)SU.setupKey=k.value;
   }else if(SU.step===1){
     $$('.su-mod').forEach(x=>SU.modules[x.dataset.k]=x.checked);
   }else if(SU.step===2){
@@ -338,10 +339,10 @@ async function submitSetup(){
     modules:SU.modules, perms, lines, resCats
   };
   try{
-    const res=await fetch('/api/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({members,settings})});
+    const res=await fetch('/api/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({members,settings,setupKey:SU.setupKey})});
     const data=await res.json();
     if(!res.ok||!data.ok)throw new Error(data.error||'初始化失败');
-    S=data.state;
+    S=data.state;SU.setupKey='';
     refreshCfg();applyConfig();
     $('#setup').style.display='none';
     showWelcome();
@@ -378,7 +379,7 @@ async function submitPin(){
   try{
     const r=await api(m.pinBound?'/auth/login':'/auth/bind',{method:'POST',body:{memberId:pickedId,pin}});
     token=r.token;localStorage.setItem(TOKEN_KEY,token);
-    me=r.me;
+    me=r.me;await bootstrap();
     $('#welcome').classList.remove('on');
     enterMain();
     toast((m.pinBound?'欢迎回来，':'PIN 已设置，欢迎，')+me.name,'ok');
@@ -399,8 +400,10 @@ function refreshAdminBtns(){
   $('#btn-member').style.display=can('memberManage')?'':'none';
 }
 async function pollSync(){
+  if(!me)return;
   try{
-    await bootstrap();
+    const data=await bootstrap();
+    if(!data.authenticated){token=null;localStorage.removeItem(TOKEN_KEY);me=null;showWelcome();return}
     lastSync=Date.now();setSync(true);
     refreshCfg();applyConfig();   // 设置可能被恢复备份等操作改变，每次同步后重算
     // 正在输入/编辑/弹窗时跳过重渲染，避免打断用户
@@ -540,10 +543,12 @@ function renderReminders(){
 }
 
 /* ============ Permissions ============ */
+const TASK_FLOW={unclaimed:['doing'],doing:['review'],review:['rework','done'],rework:['doing'],done:[]};
 function canEdit(t){if(isAdmin())return true;return t.assigneeId===me.id}
 function canChangeStatusTo(t,to){
   if(to===t.status)return{ok:false,reason:'已经是该状态'};
   if(to==='unclaimed')return{ok:false,reason:'任务不能被退回待认领'};
+  if(!(TASK_FLOW[t.status]||[]).includes(to))return{ok:false,reason:'当前状态不能变更为该状态'};
   if(to==='doing'){
     if(t.status==='unclaimed')return{ok:true};
     if(t.status==='rework'&&t.assigneeId===me.id)return{ok:true};

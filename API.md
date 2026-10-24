@@ -145,18 +145,23 @@
 ### 公开接口（无需登录）
 
 #### `GET /api/bootstrap`
-拉取全量状态。前端启动时和每 12 秒轮询都会调用。
+前端启动时和每 12 秒轮询都会调用。未登录或凭证无效时只返回 `setupDone`、`settings` 和成员摘要；有效会话才返回完整工作状态。
 ```json
 // 响应
-{ "ok": true, "serverTime": 1730000000000, "state": { ...上面模型，去掉敏感字段 } }
+{ "ok": true, "serverTime": 1730000000000, "authenticated": true, "state": { ...上面模型，去掉敏感字段 } }
 ```
+> `authenticated=false` 时，`state` 不含任务、文档、附件、公告、文献、审议意见或提醒数据。
 > `serverTime` 是服务器当前毫秒时间戳，前端用它校准时差（提醒横幅的"周日 20 点"判断依赖它）。
 
 #### `POST /api/setup`
-初始化工作台，只能成功调用一次（`setupDone` 已为 true 时返回 403）。第一个打开页面的人自动成为管理员。
+初始化工作台，只能成功调用一次（`setupDone` 已为 true 时返回 403）。必须提供服务端启动日志中的初始化密钥，或通过 `SETUP_KEY` 环境变量预先指定。
 ```json
 // 请求
-{ "adminName": "张三", "memberNames": ["李四", "王五"] }   // memberNames 可为空数组
+{
+  "setupKey": "初始化密钥",
+  "members": [{ "name": "张三", "admin": true }, { "name": "李四", "admin": false }],
+  "settings": { "title": "期末视频项目工作台" }
+}
 // 响应
 { "ok": true, "state": { ... } }
 ```
